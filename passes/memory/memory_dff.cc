@@ -20,6 +20,7 @@
 #include <algorithm>
 #include "kernel/yosys.h"
 #include "kernel/sigtools.h"
+#include "kernel/ffinit.h"
 
 USING_YOSYS_NAMESPACE
 PRIVATE_NAMESPACE_BEGIN
@@ -34,19 +35,11 @@ struct MemoryDffWorker
 	dict<SigBit, int> sigbit_users_count;
 	dict<SigSpec, Cell*> mux_cells_a, mux_cells_b;
 	pool<Cell*> forward_merged_dffs, candidate_dffs;
-	pool<SigBit> init_bits;
+	FfInitVals initvals;
 
 	MemoryDffWorker(Module *module) : module(module), sigmap(module)
 	{
-		for (auto wire : module->wires()) {
-			if (wire->attributes.count(ID::init) == 0)
-				continue;
-			SigSpec sig = sigmap(wire);
-			Const initval = wire->attributes.at(ID::init);
-			for (int i = 0; i < GetSize(sig) && i < GetSize(initval); i++)
-				if (initval[i] == State::S0 || initval[i] == State::S1)
-					init_bits.insert(sig[i]);
-		}
+		initvals.set(&sigmap, module);
 	}
 
 	bool find_sig_before_dff(RTLIL::SigSpec &sig, RTLIL::SigSpec &clk, bool &clk_polarity, bool after = false)
@@ -58,7 +51,7 @@ struct MemoryDffWorker
 			if (bit.wire == NULL)
 				continue;
 
-			if (!after && init_bits.count(sigmap(bit)))
+			if (!after && initvals(bit) != State::Sx)
 				return false;
 
 			for (auto cell : dff_cells)
@@ -88,7 +81,7 @@ struct MemoryDffWorker
 				if (d.size() != 1)
 					continue;
 
-				if (after && init_bits.count(d))
+				if (after && initvals(d) != State::Sx)
 					return false;
 
 				bit = d;
