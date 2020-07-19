@@ -19,6 +19,7 @@
 
 #include "kernel/yosys.h"
 #include "kernel/sigtools.h"
+#include "kernel/ffinit.h"
 
 USING_YOSYS_NAMESPACE
 PRIVATE_NAMESPACE_BEGIN
@@ -80,19 +81,7 @@ struct Clk2fflogicPass : public Pass {
 		for (auto module : design->selected_modules())
 		{
 			SigMap sigmap(module);
-			dict<SigBit, State> initbits;
-			pool<SigBit> del_initbits;
-
-			for (auto wire : module->wires())
-				if (wire->attributes.count(ID::init) > 0)
-				{
-					Const initval = wire->attributes.at(ID::init);
-					SigSpec initsig = sigmap(wire);
-
-					for (int i = 0; i < GetSize(initval) && i < GetSize(initsig); i++)
-						if (initval[i] == State::S0 || initval[i] == State::S1)
-							initbits[initsig[i]] = initval[i];
-				}
+			FfInitVals initvals(&sigmap, module);
 
 			for (auto cell : vector<Cell*>(module->selected_cells()))
 			{
@@ -218,21 +207,10 @@ struct Clk2fflogicPass : public Pass {
 						module->addAnd(NEW_ID, t, c, sig_q);
 					}
 
-					Const initval;
-					bool assign_initval = false;
-					for (int i = 0; i < GetSize(sig_d); i++) {
-						SigBit qbit = sigmap(sig_q[i]);
-						if (initbits.count(qbit)) {
-							initval.bits.push_back(initbits.at(qbit));
-							del_initbits.insert(qbit);
-						} else
-							initval.bits.push_back(State::Sx);
-						if (initval.bits.back() != State::Sx)
-							assign_initval = true;
-					}
-
-					if (assign_initval)
-						past_q->attributes[ID::init] = initval;
+					Const initval = initvals(sig_q);
+					initvals.remove_init(sig_q);
+					if (!initval.is_fully_undef())
+						initvals.set_init(past_q, initval);
 
 					module->remove(cell);
 					continue;
@@ -351,47 +329,17 @@ struct Clk2fflogicPass : public Pass {
 						module->addMuxGate(NEW_ID, past_q, past_d, clock_edge, sig_q);
 					}
 
-					Const initval;
-					bool assign_initval = false;
-					for (int i = 0; i < GetSize(sig_d); i++) {
-						SigBit qbit = sigmap(sig_q[i]);
-						if (initbits.count(qbit)) {
-							initval.bits.push_back(initbits.at(qbit));
-							del_initbits.insert(qbit);
-						} else
-							initval.bits.push_back(State::Sx);
-						if (initval.bits.back() != State::Sx)
-							assign_initval = true;
-					}
-
-					if (assign_initval) {
-						past_d->attributes[ID::init] = initval;
-						past_q->attributes[ID::init] = initval;
+					Const initval = initvals(sig_q);
+					initvals.remove_init(sig_q);
+					if (!initval.is_fully_undef()) {
+						initvals.set_init(past_d, initval);
+						initvals.set_init(past_q, initval);
 					}
 
 					module->remove(cell);
 					continue;
 				}
 			}
-
-			for (auto wire : module->wires())
-				if (wire->attributes.count(ID::init) > 0)
-				{
-					bool delete_initattr = true;
-					Const initval = wire->attributes.at(ID::init);
-					SigSpec initsig = sigmap(wire);
-
-					for (int i = 0; i < GetSize(initval) && i < GetSize(initsig); i++)
-						if (del_initbits.count(initsig[i]) > 0)
-							initval[i] = State::Sx;
-						else if (initval[i] != State::Sx)
-							delete_initattr = false;
-
-					if (delete_initattr)
-						wire->attributes.erase(ID::init);
-					else
-						wire->attributes.at(ID::init) = initval;
-				}
 		}
 
 	}
